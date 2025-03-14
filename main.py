@@ -3,6 +3,7 @@ import json
 import os
 from datetime import datetime
 from typing import List, Dict, Any
+import speech_recognition as sr
 
 from calendar_manager import CalendarManager
 from ai_assistant import query_ollama, is_ollama_running
@@ -21,8 +22,28 @@ def save_history(history: List[Dict[str, Any]], file_path: str) -> None:
     with open(file_path, 'w') as f:
         json.dump(history, f, indent=2)
 
+def transcribe_audio(recognizer, microphone):
+    with microphone as source:
+        print("Listening... (speak now)")
+        recognizer.adjust_for_ambient_noise(source, duration=1)
+        try:
+            audio = recognizer.listen(source, timeout=5, phrase_time_limit=15)
+            print("Processing your speech...")
+            text = recognizer.recognize_google(audio)
+            print(f"You said: {text}")
+            return text
+        except sr.WaitTimeoutError:
+            print("No speech detected. Try again.")
+            return None
+        except sr.UnknownValueError:
+            print("Could not understand the audio. Try again.")
+            return None
+        except sr.RequestError as e:
+            print(f"Error with speech recognition service: {e}")
+            return None
+
 def main():
-    parser = argparse.ArgumentParser(description="Calendar Assistant using Ollama")
+    parser = argparse.ArgumentParser(description="Voice Calendar Assistant using Ollama")
     parser.add_argument("--model", type=str, default="llama3.2",
                         help="Model to use (default: llama3.2)")
     parser.add_argument("--temperature", type=float, default=0.7,
@@ -31,6 +52,8 @@ def main():
                         help="File to store conversation history (default: calendar_history.json)")
     parser.add_argument("--calendar-file", type=str, default="calendar_data.json",
                         help="File to store calendar data (default: calendar_data.json)")
+    parser.add_argument("--text-input", action="store_true",
+                        help="Use text input instead of voice")
     
     args = parser.parse_args()
     
@@ -47,23 +70,46 @@ def main():
     print("Calendar Assistant Jared - Ready to help organize your schedule")
     print(f"Using model: {args.model}")
     
+    recognizer = sr.Recognizer()
+    microphone = sr.Microphone()
+    
+    if not args.text_input:
+        print("Adjusting for ambient noise... Please wait.")
+        with microphone as source:
+            recognizer.adjust_for_ambient_noise(source, duration=2)
+    
     try:
         while True:
-            lines = []
-            while True:
-                line = input("> " if not lines else "  ")
-                if not line and lines:
-                    break
-                if line.lower() in ["exit", "quit"]:
+            prompt = None
+            
+            if args.text_input:
+                lines = []
+                while True:
+                    line = input("> " if not lines else "  ")
+                    if not line and lines:
+                        break
+                    if line.lower() in ["exit", "quit"]:
+                        save_history(history, history_file)
+                        print(f"Conversation history saved to {history_file}")
+                        return
+                    lines.append(line)
+                
+                if lines:
+                    prompt = "\n".join(lines)
+            else:
+                print("\nPress Enter to start speaking, or type 'exit' to quit:")
+                user_input = input()
+                
+                if user_input.lower() in ["exit", "quit"]:
                     save_history(history, history_file)
                     print(f"Conversation history saved to {history_file}")
                     return
-                lines.append(line)
+                
+                prompt = transcribe_audio(recognizer, microphone)
             
-            if not lines:
+            if not prompt:
                 continue
             
-            prompt = "\n".join(lines)
             print("\nThinking...")
             
             response = query_ollama(prompt, calendar_manager, history, args.model, args.temperature)
