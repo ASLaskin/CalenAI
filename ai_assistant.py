@@ -13,20 +13,33 @@ def is_ollama_running() -> bool:
     return False
 
 def extract_calendar_operations(response: str, calendar_manager) -> List[Dict[str, Any]]:
-   
     operations = []
-
-    json_pattern = r'```json\s*(\{.*?\})\s*```'
+    
+    json_pattern = r'```(?:json)?\s*(\{[\s\S]*?\})\s*```'
     json_blocks = re.findall(json_pattern, response, re.DOTALL)
     
-    for json_block in json_blocks:
+    if not json_blocks:
+        json_pattern = r'\{[\s\S]*?"calendar_operations"\s*:\s*\[[\s\S]*?\]\s*\}'
+        json_blocks = re.findall(json_pattern, response, re.DOTALL)
+    
+    for i, json_block in enumerate(json_blocks):
         try:
+            print(f"DEBUG: Found JSON block {i+1}:\n{json_block}")
             data = json.loads(json_block)
             if "calendar_operations" in data:
                 operations = data["calendar_operations"]
                 break
-        except json.JSONDecodeError:
-            continue
+        except json.JSONDecodeError as e:
+            try:
+                cleaned_json = json_block.replace("'", '"') 
+                data = json.loads(cleaned_json)
+                if "calendar_operations" in data:
+                    operations = data["calendar_operations"]
+                    print(f"DEBUG: Successfully extracted {len(operations)} operations after cleaning")
+                    break
+            except json.JSONDecodeError:
+                print(f"DEBUG: Failed to parse JSON block {i+1} even after cleaning")
+                continue
     
     return operations
 
@@ -115,11 +128,13 @@ def query_ollama(prompt: str, calendar_manager, history: List[Dict[str, Any]] = 
         for entry in history[-5:]:  
             conversation_context += f"Human: {entry['prompt']}\nAssistant: {entry['response']}\n\n"
 
-    # System instructions for the calendar assistant
+    # Enhanced system instructions with more explicit formatting requirements
     system_instructions = """
-You are a calendar assistant named Jared with direct control over the user's schedule. You can add, delete, update, and reorganize events.
+You are a calendar assistant named Jared with direct control over the user's schedule. You add, delete, update, and reorganize events.
 
-If an action needs to be done, include a JSON block in your response with the following format:
+For any calendar action, always include a JSON block with calendar_operations in your response.
+
+When adding events, include JSON in this format:
 ```json
 {
   "calendar_operations": [
@@ -145,35 +160,28 @@ If an action needs to be done, include a JSON block in your response with the fo
         "start_time": "New start time",
         "end_time": "New end time",
         "description": "New description"
-      }
-    },
+    }
+  ]
+}
+```
+
+For simple requests like "add a meeting at 3pm" or "meeting at 5pm" you MUST include the JSON block with the complete operation details including the date (use current date if not specified).
+
+Other operations follow similar formats. Always add a friendly message after the JSON block.
+
+For example, when someone asks to add a meeting, respond like:
+"I've added your meeting to the calendar! Here are the details:
+
+```json
+{
+  "calendar_operations": [
     {
-      "operation": "move_event",
-      "old_date": "YYYY-MM-DD",
-      "new_date": "YYYY-MM-DD",
-      "event_id": "id_of_event_to_move"
-    },
-    {
-      "operation": "clear_day",
-      "date": "YYYY-MM-DD"
-    },
-    {
-      "operation": "reorganize_day",
-      "date": "YYYY-MM-DD",
-      "schedule": [
-        {
-          "title": "Event 1",
-          "start_time": "9:00am",
-          "end_time": "10:00am",
-          "description": "Description"
-        },
-        {
-          "title": "Event 2",
-          "start_time": "11:00am",
-          "end_time": "12:00pm",
-          "description": "Description"
-        }
-      ]
+      "operation": "add_event",
+      "date": "2025-03-14",
+      "start_time": "3:00pm",
+      "end_time": "4:00pm",
+      "title": "Meeting",
+      "description": ""
     }
   ]
 }
@@ -187,33 +195,46 @@ If the user says:
 - "Reorganize my day to fit in 1 hour of reading" - Adjust the schedule
 - "I want to go to the gym for an hour and read for 2 hours" - Create a reasonable schedule
 
-When being asked to show the calender, respond with how a human would say it outloud (just do it dont say this is a human-readable version). For example: "Today at 5pm you have yoga and at 8 you have dinner with your wife."
-
 If an action was performed to the calender add a confirmation message and say something nice.
 
-Keep answers concise.
+Example: Looking forward to helping you manage your schedule!"
+
+DO NOT EVER SHOW THE CALENDER
 """
     
     # Full prompt
     full_prompt = f"{system_instructions}\n\n{calendar_context}\n\n{conversation_context}Human: {prompt}\nAssistant:"
     
-    payload = {
-        "model": model,
-        "prompt": full_prompt,
-        "stream": False,
-        "temperature": temperature
-    }
-    
     try:
-        response = requests.post(api_url, json=payload)
+        response = requests.post(api_url, json={
+            "model": model,
+            "prompt": full_prompt,
+            "stream": False,
+            "temperature": temperature
+        })
         response.raise_for_status()
         
         ai_response = response.json().get("response", "No response received")
 
+        print("DEBUG: Raw AI response length:", (ai_response))
+        
         operations = extract_calendar_operations(ai_response, calendar_manager)
+        process_result = ""
+        
         if operations:
+            print("DEBUG: Operations extracted successfully:", operations)
             process_result = process_calendar_operations(operations, calendar_manager)
+            
+            json_pattern = r'```(?:json)?\s*(\{[\s\S]*?\})\s*```'
+            ai_response = re.sub(json_pattern, '', ai_response, flags=re.DOTALL)
+            ai_response = ai_response.strip()
+            
+            if process_result and "No calendar operations performed" not in process_result:
+                ai_response += f"\n\n[Calendar updated: {process_result}]"
+        else:
+            print("DEBUG: No operations extracted from response")
         
         return ai_response
     except requests.exceptions.RequestException as e:
+        print(f"DEBUG: Request error: {str(e)}")
         return f"Error: {str(e)}"

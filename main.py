@@ -113,7 +113,7 @@ def main():
             print("\nThinking...")
             
             response = query_ollama(prompt, calendar_manager, history, args.model, args.temperature)
-            print("\n" + response + "\n")
+            # print("\n" + response + "\n")
             
             history.append({
                 "timestamp": datetime.now().isoformat(),
