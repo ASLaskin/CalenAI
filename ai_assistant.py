@@ -24,7 +24,7 @@ def extract_calendar_operations(response: str, calendar_manager) -> List[Dict[st
     
     for i, json_block in enumerate(json_blocks):
         try:
-            print(f"DEBUG: Found JSON block {i+1}:\n{json_block}")
+            # print(f"DEBUG: Found JSON block {i+1}:\n{json_block}")
             data = json.loads(json_block)
             if "calendar_operations" in data:
                 operations = data["calendar_operations"]
@@ -35,7 +35,7 @@ def extract_calendar_operations(response: str, calendar_manager) -> List[Dict[st
                 data = json.loads(cleaned_json)
                 if "calendar_operations" in data:
                     operations = data["calendar_operations"]
-                    print(f"DEBUG: Successfully extracted {len(operations)} operations after cleaning")
+                    # print(f"DEBUG: Successfully extracted {len(operations)} operations after cleaning")
                     break
             except json.JSONDecodeError:
                 print(f"DEBUG: Failed to parse JSON block {i+1} even after cleaning")
@@ -117,18 +117,11 @@ def process_calendar_operations(operations: List[Dict[str, Any]], calendar_manag
     
     return "\n".join(result) if result else "No calendar operations performed."
 
-def query_ollama(prompt: str, calendar_manager, history: List[Dict[str, Any]] = None, 
-                model: str = "llama3.2", temperature: float = 0.7) -> str:
+def query_ollama(prompt: str, calendar_manager, model: str = "llama3.2", temperature: float = 0.7) -> str:
     api_url = "http://localhost:11434/api/generate"
     
     calendar_context = calendar_manager.get_calendar_context()
 
-    conversation_context = ""
-    if history:
-        for entry in history[-5:]:  
-            conversation_context += f"Human: {entry['prompt']}\nAssistant: {entry['response']}\n\n"
-
-    # Enhanced system instructions with more explicit formatting requirements
     system_instructions = """
 You are a calendar assistant named Jared with direct control over the user's schedule. You add, delete, update, and reorganize events.
 
@@ -195,15 +188,16 @@ If the user says:
 - "Reorganize my day to fit in 1 hour of reading" - Adjust the schedule
 - "I want to go to the gym for an hour and read for 2 hours" - Create a reasonable schedule
 
-If an action was performed to the calender add a confirmation message and say something nice.
+If an action was performed to the calender MAKE SURE TO add a confirmation message
+- Example: Successfully added the dinner tomorrow, enjoy! "
 
-Example: Looking forward to helping you manage your schedule!"
-
-DO NOT EVER SHOW THE CALENDER
+RULES
+-NEVER RESPOND WITH THE UPDATED CALENDER
+-ALWAYS INCLUDE A JSON IF UPDATE/CHANGE NECESSARY
+-INCLUDE A NICE MESSAGE AFTER JSON
 """
     
-    # Full prompt
-    full_prompt = f"{system_instructions}\n\n{calendar_context}\n\n{conversation_context}Human: {prompt}\nAssistant:"
+    full_prompt = f"{system_instructions}\n\n{calendar_context}\n\nHuman: {prompt}\nAssistant:"
     
     try:
         response = requests.post(api_url, json={
@@ -216,21 +210,21 @@ DO NOT EVER SHOW THE CALENDER
         
         ai_response = response.json().get("response", "No response received")
 
-        print("DEBUG: Raw AI response length:", (ai_response))
+        # print("DEBUG: Raw AI response length:", len(ai_response))
         
         operations = extract_calendar_operations(ai_response, calendar_manager)
         process_result = ""
         
         if operations:
-            print("DEBUG: Operations extracted successfully:", operations)
+            # print("DEBUG: Operations extracted successfully:", operations)
             process_result = process_calendar_operations(operations, calendar_manager)
             
             json_pattern = r'```(?:json)?\s*(\{[\s\S]*?\})\s*```'
             ai_response = re.sub(json_pattern, '', ai_response, flags=re.DOTALL)
             ai_response = ai_response.strip()
             
-            if process_result and "No calendar operations performed" not in process_result:
-                ai_response += f"\n\n[Calendar updated: {process_result}]"
+            # if process_result and "No calendar operations performed" not in process_result:
+            #     ai_response += f"\n\n[Calendar updated: {process_result}]"
         else:
             print("DEBUG: No operations extracted from response")
         
