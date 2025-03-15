@@ -4,9 +4,27 @@ import os
 from datetime import datetime
 from typing import List, Dict, Any
 import speech_recognition as sr
+import pyttsx3
 
 from calendar_manager import CalendarManager
 from ai_assistant import query_ollama, is_ollama_running
+
+
+tts_engine = pyttsx3.init()
+voices = tts_engine.getProperty("voices")
+tts_engine.setProperty("rate", 150)
+
+def speak_text(text):
+    #8 is a funny voice
+    #14 is decent
+    #46 is meh
+    #82 is decent
+    #95 is russian
+    #117 is decent
+    #132 is decent 
+    tts_engine.setProperty("voice", voices[46].id)
+    tts_engine.say(text)
+    tts_engine.runAndWait()
 
 def main():
     parser = argparse.ArgumentParser(description="Voice Calendar Assistant using Ollama")
@@ -73,6 +91,7 @@ def main():
             
             response = query_ollama(prompt, calendar_manager, model=args.model, temperature=args.temperature)
             print(response)
+            speak_text(response)
             
     except KeyboardInterrupt:
         print("\nExiting...")
@@ -82,7 +101,7 @@ def transcribe_audio(recognizer, microphone):
         print("Listening... (speak now)")
         recognizer.adjust_for_ambient_noise(source, duration=1)
         try:
-            audio = recognizer.listen(source, timeout=5, phrase_time_limit=15)
+            audio = recognizer.listen(source, timeout=10, phrase_time_limit=15)
             print("Processing your speech...")
             text = recognizer.recognize_google(audio)
             print(f"You said: {text}")
